@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "portals": [
+    {
+      "id": "jd-campus",
+      "companyAliases": ["京东", "JD"],
+      "centerUrl": "https://campus.jd.com/#/myDeliver?type=present",
+      "trackingCapability": "full_status_center",
+      "knownStages": ["已投递", "测评", "笔试", "综合筛选", "面试", "Offer", "入职"]
+    },
+    {
+      "id": "baidu-campus",
+      "companyAliases": ["百度", "Baidu"],
+      "centerUrl": "https://talent.baidu.com/jobs/center",
+      "trackingCapability": "full_status_center",
+      "knownStages": ["投递简历", "简历筛选", "笔试", "面试", "OFFER评估", "入职"]
+    },
+    {
+      "id": "deepseek-moka",
+      "companyAliases": ["DeepSeek", "深度求索"],
+      "centerUrl": "https://talent.deepseek.com/",
+      "trackingCapability": "submission_confirmation_only",
+      "knownStages": ["已成功提交申请，请静待佳音！"]
+    }
+  ]
+}

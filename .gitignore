@@ -1,0 +1,25 @@
+node_modules/
+dist/
+release/
+.DS_Store
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+output/
+public/qa/
+public/assets/profile-mountain.png
+public/logos/doubao.jpg
+
+# Local personal workspace and generated visual QA
+.learnings/
+design/
+design-qa.md
+.openai/
+data/workspace.json
+data/backups/
+data/assets/
+
+# Local handoff notes may contain machine-specific paths and private record counts
+项目审查与使用说明.md
