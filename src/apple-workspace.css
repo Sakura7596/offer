@@ -1026,6 +1026,9 @@ button.aw-tr:active { background: #f1f5fa; }
 .aw-tracker-table .aw-tr { grid-template-columns: 1.72fr .72fr .86fr .7fr .72fr .75fr 1.2fr .7fr .66fr .82fr; min-height: 76px; padding-inline: 20px; cursor: default; }
 .aw-tracker-table .aw-th { min-height: 50px; cursor: default; background: #faf8f5; }
 .aw-tracker-table .aw-tr > span { color: #3f413d; font-size: 13px; }
+.aw-tracker-table .aw-tr:not(.aw-th) > span:nth-child(3) { display: flex; flex-direction: column; justify-content: center; gap: 4px; overflow: visible; white-space: normal; }
+.aw-tracker-table .aw-tr:not(.aw-th) > span:nth-child(3) strong { color: #242420; font-size: 13px; line-height: 1.25; white-space: nowrap; }
+.aw-tracker-table .aw-tr:not(.aw-th) > span:nth-child(3) small { overflow: visible; color: var(--aw-muted); font-size: 11px; line-height: 1.35; text-overflow: clip; white-space: normal; }
 .aw-tracker-table .aw-tr > span:nth-child(7) { display: flex; flex-direction: column; gap: 4px; }
 .aw-tracker-table .aw-tr > span:nth-child(7) strong { color: #242420; font-size: 13px; }
 .aw-tracker-table .aw-tr > span:nth-child(7) small { color: var(--aw-muted); font-size: 11px; }
