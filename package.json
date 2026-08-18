@@ -14,7 +14,7 @@
     "build:sites": "vite build && node scripts/prepare-sites-build.mjs",
     "preview": "vite preview",
     "app:start": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
-    "test": "node --test tests/workspace-model.test.mjs tests/data-store.test.mjs",
+    "test": "node --test tests/workspace-model.test.mjs tests/data-store.test.mjs tests/company-identity.test.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs",
     "desktop:start": "npm run build && electron .",
     "desktop:dist": "npm run build && electron-builder --mac dmg --arm64 --publish never",

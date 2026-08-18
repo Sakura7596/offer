@@ -33,22 +33,38 @@ export function nodeName(node) {
   return node.type === "自定义" ? (node.title || "自定义节点") : node.type;
 }
 
-function isApplicationNode(node) {
-  return /投递|网申/.test(`${node?.type || ""}${node?.title || ""}`);
+export function isApplicationNode(node) {
+  const type = String(node?.type || "").trim();
+  const title = String(node?.title || "").trim();
+  if (/^(投递|网申|提交申请|application)$/i.test(type)) return true;
+  if (!/投递|网申|提交申请/i.test(title)) return false;
+  return !/待投递|准备|计划|提醒|材料|简历|修改|整理|复习|确认/i.test(title);
 }
 
-function withTimeline(company, timeline, removedNode = null) {
-  const appliedAt = [...timeline]
+function withTimeline(company, timeline, removedNode = null, today = dateKey(new Date())) {
+  const limit = validDateKey(today);
+  const timelineAppliedAt = [...timeline]
     .filter(isApplicationNode)
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)))[0]?.date;
+    .map((node) => validDateKey(node?.date))
+    .filter((date) => date && date <= limit)
+    .sort((a, b) => a.localeCompare(b))[0];
+  const existingAppliedAt = validDateKey(company.appliedAt);
+  const removedAppliedAt = isApplicationNode(removedNode)
+    && validDateKey(removedNode?.date) === existingAppliedAt;
+  const preservedAppliedAt = existingAppliedAt && !removedAppliedAt
+    ? existingAppliedAt
+    : "";
+  const appliedAt = [timelineAppliedAt, preservedAppliedAt]
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))[0] || "";
   return {
     ...company,
     timeline,
-    appliedAt: appliedAt || (isApplicationNode(removedNode) ? "" : company.appliedAt),
+    appliedAt,
   };
 }
 
-export function upsertTimelineNode(companies, targetCompanyId, originalCompanyId, node) {
+export function upsertTimelineNode(companies, targetCompanyId, originalCompanyId, node, today = dateKey(new Date())) {
   return companies.map((company) => {
     const isTarget = company.id === targetCompanyId;
     const isOriginal = Boolean(node.id) && company.id === (originalCompanyId || targetCompanyId);
@@ -58,23 +74,39 @@ export function upsertTimelineNode(companies, targetCompanyId, originalCompanyId
       ...(company.timeline || []).filter((item) => item.id !== node.id),
       ...(isTarget ? [node] : []),
     ];
-    return withTimeline(company, timeline, removedNode);
+    return withTimeline(company, timeline, removedNode, today);
   });
 }
 
-export function removeTimelineNode(companies, companyId, nodeId) {
+export function removeTimelineNode(companies, companyId, nodeId, today = dateKey(new Date())) {
   return companies.map((company) => {
     if (company.id !== companyId) return company;
     const removedNode = (company.timeline || []).find((item) => item.id === nodeId);
     const timeline = (company.timeline || []).filter((item) => item.id !== nodeId);
-    return withTimeline(company, timeline, removedNode);
+    return withTimeline(company, timeline, removedNode, today);
   });
 }
 
-export function applicationDate(company) {
-  return String(company?.appliedAt || "") || [...(company?.timeline || [])]
-    .filter((node) => /投递|网申/.test(`${node.type || ""}${node.title || ""}`))
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)))[0]?.date || "";
+export function applicationDate(company, today = dateKey(new Date())) {
+  const limit = validDateKey(today);
+  if (!limit) return "";
+  const explicit = validDateKey(company?.appliedAt);
+  if (explicit && explicit <= limit) return explicit;
+  return (company?.timeline || [])
+    .filter(isApplicationNode)
+    .map((node) => validDateKey(node?.date))
+    .filter((date) => date && date <= limit)
+    .sort((a, b) => a.localeCompare(b))[0] || "";
+}
+
+export function applicationInputDate(company) {
+  const explicit = validDateKey(company?.appliedAt);
+  if (explicit) return explicit;
+  return (company?.timeline || [])
+    .filter(isApplicationNode)
+    .map((node) => validDateKey(node?.date))
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))[0] || "";
 }
 
 export function currentNode(company, today = dateKey(new Date())) {
@@ -103,6 +135,71 @@ export function normalizePriority(value) {
 
 export function statusLabel(company) {
   return String(company?.status || "待投递").trim() || "待投递";
+}
+
+export function preserveUnchangedExplicitValue(rawValue, displayedValue, submittedValue) {
+  const raw = String(rawValue || "");
+  const submitted = String(submittedValue || "");
+  return !raw.trim() && submitted === String(displayedValue || "") ? rawValue : submitted;
+}
+
+export function updateApplicationRecord(company, fields, today = dateKey(new Date()), newNodeId = `node-${Date.now()}`) {
+  if (!company || typeof company !== "object") return { company, error: "找不到要更新的岗位" };
+  const changes = fields && typeof fields === "object" ? fields : {};
+  const next = { ...company };
+  const textFields = [
+    "name", "role", "team", "track", "channel", "location", "batch",
+    "nextAction", "nextActionDeadline", "jobUrl", "jd", "jdImage", "notes",
+  ];
+  for (const field of textFields) {
+    if (Object.hasOwn(changes, field)) next[field] = String(changes[field] || "").trim();
+  }
+  if (!String(next.name || "").trim() || !String(next.role || "").trim()) {
+    return { company, error: "公司名称和岗位名称不能为空" };
+  }
+  if (Object.hasOwn(changes, "priority")) next.priority = normalizePriority(changes.priority);
+  if (Object.hasOwn(changes, "status")) {
+    next.status = preserveUnchangedExplicitValue(company.status, statusLabel(company), changes.status);
+  }
+  if (Object.hasOwn(changes, "progress")) {
+    next.progress = preserveUnchangedExplicitValue(company.progress, currentProgress(company, today), changes.progress);
+  }
+
+  let plannedAppliedAt = "";
+  let hasApplied = false;
+  if (Object.hasOwn(changes, "appliedAt")) {
+    const rawAppliedAt = String(changes.appliedAt || "").trim();
+    const limit = validDateKey(today) || dateKey(new Date());
+    plannedAppliedAt = expandMonthDay(rawAppliedAt, applicationInputDate(company), Number(limit.slice(0, 4)));
+    if (rawAppliedAt && !plannedAppliedAt) {
+      return { company, error: "投递时间无效，请按月-日填写" };
+    }
+    const timeline = [...(company.timeline || [])];
+    const applicationIndex = timeline.findIndex(isApplicationNode);
+    if (plannedAppliedAt && applicationIndex >= 0) {
+      timeline[applicationIndex] = { ...timeline[applicationIndex], date: plannedAppliedAt };
+    } else if (plannedAppliedAt) {
+      timeline.push({ id: newNodeId, type: "投递", title: "", date: plannedAppliedAt, time: "", note: "" });
+    } else if (applicationIndex >= 0) {
+      timeline.splice(applicationIndex, 1);
+    }
+    hasApplied = Boolean(plannedAppliedAt && plannedAppliedAt <= limit);
+    next.appliedAt = hasApplied ? plannedAppliedAt : "";
+    next.timeline = timeline;
+  }
+
+  if (next.status !== company.status || next.progress !== company.progress) next.lastActivityAt = validDateKey(today) || dateKey(new Date());
+  return { company: next, error: "", plannedAppliedAt, hasApplied };
+}
+
+export function calendarEventType(node) {
+  if (node?.isAction) return "deadline";
+  const type = String(node?.type || "");
+  if (/截止|DDL|跟进|提交|报名/i.test(type)) return "deadline";
+  if (/面试|一面|二面|三面|终面|HR\s*面/i.test(type)) return "interview";
+  if (/笔试|测评|机试|在线测试/i.test(type)) return "assessment";
+  if (/Offer|录用|签约|入职/i.test(type)) return "offer";
+  return "other";
 }
 
 const TERMINAL_STATUS = /已拒绝|拒绝|已挂|淘汰|未通过|暂停|放弃|撤回|结束|已归档|入职|签约|hired|rejected|discarded|closed/i;
@@ -146,11 +243,49 @@ export function scheduleNodes(company, today = dateKey(new Date())) {
   return nodes;
 }
 
+const PERSONAL_NODE_PATTERN = /准备|计划|提醒|待办|复习|复盘|整理|修改|补充|跟进|催问|行动|材料|ddl|deadline/i;
+
+function isRecruitmentEvidenceCandidate(node) {
+  if (!node || node.isAction || node.kind === "note") return false;
+  const type = String(node.type || "").trim();
+  return Boolean(type && type !== "自定义" && !PERSONAL_NODE_PATTERN.test(type));
+}
+
+function isRecruitmentActivityNode(node) {
+  if (!isRecruitmentEvidenceCandidate(node)) return false;
+  return /投递|网申|筛选|资格审查|测评|笔试|沟通|面试|一面|二面|三面|终面|hr\s*面|群面|复试|offer|体检|背调|政审|公示|签约|入职|拒绝|淘汰|未通过|已挂|结束|applied|screening|assessment|interview|hired|rejected|closed/i
+    .test(String(node.type));
+}
+
+function isProgressEvidenceNode(node) {
+  if (!isRecruitmentEvidenceCandidate(node)) return false;
+  const type = String(node.type || "").trim();
+  if (/拒绝|淘汰|未通过|已挂|放弃|暂停|撤回|取消|截止|结束/i.test(type)) return false;
+  return /投递|网申|筛选|资格审查|测评|笔试|沟通|面试|一面|二面|三面|终面|hr\s*面|群面|复试|offer|体检|背调|政审|公示|签约|入职|applied|screening|assessment|interview|hired/i
+    .test(type);
+}
+
+function isTerminalEvidenceNode(node) {
+  return isRecruitmentEvidenceCandidate(node) && TERMINAL_NODE.test(String(node.type || ""));
+}
+
+function currentStageEvidenceNode(company, today) {
+  const limit = validDateKey(today);
+  if (!limit) return null;
+  return [...(company?.timeline || [])]
+    .filter((node) => {
+      const nodeDate = validDateKey(node?.date);
+      return nodeDate && nodeDate <= limit && (isProgressEvidenceNode(node) || isTerminalEvidenceNode(node));
+    })
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    .at(-1) || null;
+}
+
 export function lastActivityDate(company, today = dateKey(new Date())) {
   const limit = validDateKey(today);
   if (!limit) return "";
-  const candidates = [applicationDate(company), company?.lastActivityAt]
-    .concat((company?.timeline || []).map((node) => node?.date))
+  const candidates = [applicationDate(company, limit), company?.lastActivityAt]
+    .concat((company?.timeline || []).filter(isRecruitmentActivityNode).map((node) => node?.date))
     .map(validDateKey)
     .filter((date) => date && date <= limit)
     .sort((a, b) => a.localeCompare(b));
@@ -269,19 +404,23 @@ function canonicalProgress(value) {
   return { label: "", rank: -1 };
 }
 
-export function suggestedProgress(company, today = dateKey(new Date())) {
+export function suggestedProgressDetail(company, today = dateKey(new Date())) {
   const limit = validDateKey(today);
-  if (!limit) return "";
-  let suggestion = { label: "", rank: -1, date: "" };
+  if (!limit) return null;
+  let suggestion = { label: "", rank: -1, date: "", nodeId: "" };
   for (const node of company?.timeline || []) {
     const nodeDate = validDateKey(node?.date);
-    if (!nodeDate || nodeDate > limit) continue;
-    const candidate = canonicalProgress(`${node?.type || ""} ${node?.title || ""}`);
+    if (!nodeDate || nodeDate > limit || !isProgressEvidenceNode(node)) continue;
+    const candidate = canonicalProgress(node?.type);
     if (candidate.rank > suggestion.rank || (candidate.rank === suggestion.rank && nodeDate > suggestion.date)) {
-      suggestion = { ...candidate, date: nodeDate };
+      suggestion = { ...candidate, date: nodeDate, nodeId: String(node?.id || "") };
     }
   }
-  return suggestion.label;
+  return suggestion.rank >= 0 ? suggestion : null;
+}
+
+export function suggestedProgress(company, today = dateKey(new Date())) {
+  return suggestedProgressDetail(company, today)?.label || "";
 }
 
 export function applicationHealthIssues(company, today = dateKey(new Date())) {
@@ -296,12 +435,13 @@ export function applicationHealthIssues(company, today = dateKey(new Date())) {
   const plannedAfterToday = timeline.filter((node) => validDateKey(node?.date) > currentDay);
   const terminalTimeline = timeline.some((node) => {
     const nodeDate = validDateKey(node?.date);
-    return nodeDate && nodeDate <= currentDay && TERMINAL_NODE.test(`${node?.type || ""} ${node?.title || ""}`);
+    return nodeDate && nodeDate <= currentDay && isTerminalEvidenceNode(node);
   });
   const rawStatus = statusLabel(company);
   const statusIsTerminal = TERMINAL_STATUS.test(rawStatus);
   const progress = canonicalProgress(company.progress);
   const timelineSuggestion = suggestedProgress(company, currentDay);
+  const timelineSuggestionDetail = suggestedProgressDetail(company, currentDay);
   const suggested = canonicalProgress(timelineSuggestion);
   const addIssue = (code, severity, message, details = {}) => issues.push({ code, severity, message, ...details });
 
@@ -313,8 +453,16 @@ export function applicationHealthIssues(company, today = dateKey(new Date())) {
   }
   if (!statusIsTerminal && terminalTimeline) {
     addIssue("status-timeline-conflict", "warning", "时间线已经出现结束节点，但当前状态仍未结束。", { action: "对齐当前状态" });
-  } else if (/待投递/.test(rawStatus) && applicationDate(company) && applicationDate(company) <= currentDay) {
+  } else if (/待投递/.test(rawStatus) && applicationDate(company, currentDay)) {
     addIssue("status-timeline-conflict", "warning", "已经存在投递记录，但当前状态仍是待投递。", { action: "更新当前状态" });
+  }
+  const futureApplicationDate = timeline
+    .filter(isApplicationNode)
+    .map((node) => validDateKey(node?.date))
+    .filter((date) => date && date > currentDay)
+    .sort((a, b) => a.localeCompare(b))[0];
+  if (futureApplicationDate && /已投递|进行中|offer/i.test(rawStatus) && !applicationDate(company, currentDay)) {
+    addIssue("future-application-status-conflict", "warning", "投递日期仍在未来，但当前状态已经进入招聘流程，请核对日期或状态。", { date: futureApplicationDate });
   }
   if (!statusIsTerminal && /offer/i.test(rawStatus) && progress.rank < 90) {
     addIssue("status-progress-conflict", "warning", "当前状态已是 Offer，但当前进度尚未同步。", { suggestedProgress: "Offer" });
@@ -323,7 +471,11 @@ export function applicationHealthIssues(company, today = dateKey(new Date())) {
     addIssue("status-progress-conflict", "warning", "当前进度已经签约或入职，但当前状态仍未结束。", { action: "对齐当前状态" });
   }
   if (!statusIsTerminal && suggested.rank > progress.rank && progress.rank >= 0) {
-    addIssue("progress-timeline-conflict", "warning", `时间线已推进到${timelineSuggestion}，当前进度仍是${progress.label}。`, { suggestedProgress: timelineSuggestion });
+    addIssue("progress-timeline-conflict", "warning", `时间线已推进到${timelineSuggestion}，当前进度仍是${progress.label}。`, {
+      suggestedProgress: timelineSuggestion,
+      suggestedNodeDate: timelineSuggestionDetail?.date || "",
+      suggestedNodeId: timelineSuggestionDetail?.nodeId || "",
+    });
   }
   if (!isArchivedApplication(company)) {
     if (deadline && deadline < currentDay) {
@@ -352,21 +504,29 @@ export function aggregateApplications(companies, field, today = dateKey(new Date
   const missingLabel = field === "track" ? "赛道未注明" : field === "channel" ? "渠道未注明" : "未注明";
   const groups = new Map();
   for (const company of companies || []) {
+    if (!applicationDate(company, today) && stageFor(company, {}, today) === "wishlist") continue;
     const value = String(company?.[field] || "").trim() || missingLabel;
     if (!groups.has(value)) groups.set(value, { value, total: 0, active: 0, responded: 0, interviews: 0, offers: 0, closed: 0, waiting: [] });
     const group = groups.get(value);
     const archived = isArchivedApplication(company);
     const timelineText = (company.timeline || [])
-      .filter((node) => !validDateKey(node?.date) || validDateKey(node.date) <= today)
-      .map((node) => `${node?.type || ""} ${node?.title || ""}`).join(" ");
+      .filter((node) => {
+        const nodeDate = validDateKey(node?.date);
+        return nodeDate && nodeDate <= today && (isProgressEvidenceNode(node) || isTerminalEvidenceNode(node));
+      })
+      .map((node) => String(node.type || "")).join(" ");
     const activityText = `${company.status || ""} ${company.progress || ""} ${timelineText}`;
-    const reached = Math.max(canonicalProgress(company.progress).rank, canonicalProgress(suggestedProgress(company, today)).rank);
+    const reached = Math.max(
+      canonicalProgress(company.status).rank,
+      canonicalProgress(company.progress).rank,
+      canonicalProgress(suggestedProgress(company, today)).rank,
+    );
     group.total += 1;
     group.active += archived ? 0 : 1;
     group.closed += archived ? 1 : 0;
     group.responded += reached >= 20 ? 1 : 0;
     group.interviews += /面试|一面|二面|三面|终面|hr\s*面|interview/i.test(activityText) ? 1 : 0;
-    group.offers += /offer/i.test(activityText) ? 1 : 0;
+    group.offers += /offer|签约|入职|hired/i.test(activityText) ? 1 : 0;
     const days = archived ? null : waitingDays(company, today);
     if (days !== null) group.waiting.push(days);
   }
@@ -398,12 +558,16 @@ export function nextActionSummary(company, today = dateKey(new Date())) {
 
 export function stageFor(company, intelligence = {}, today = dateKey(new Date())) {
   const record = intelligence.applicationSync?.records?.[company?.id];
-  const latest = currentNode(company, today);
-  const text = `${record?.normalizedStage || ""} ${record?.officialStatus || ""} ${company?.status || ""} ${company?.progress || ""} ${latest?.type || ""} ${latest?.title || ""}`;
-  if (/入职|拒绝|淘汰|未通过|已挂|放弃|暂停|撤回|结束|hired|rejected|discarded/i.test(text)) return "closed";
+  const latest = currentStageEvidenceNode(company, today);
+  const text = `${record?.normalizedStage || ""} ${record?.officialStatus || ""} ${company?.status || ""} ${company?.progress || ""} ${latest?.type || ""}`;
+  if (/签约|入职|拒绝|淘汰|未通过|已挂|放弃|暂停|撤回|结束|hired|rejected|discarded/i.test(text)) return "closed";
   if (/offer/i.test(text)) return "offer";
   if (/面试|一面|二面|三面|终面|hr\s*面|interview/i.test(text)) return "interview";
   if (/筛选|测评|笔试|沟通|responded|screening|assessment/i.test(text)) return "screening";
-  if (/投递|网申|已投递|进行中|applied/i.test(text)) return "applied";
+  const hasAppliedSignal = (value) => {
+    const signal = String(value || "").trim();
+    return signal && !/待投递|未开始|计划投递/.test(signal) && /投递|网申|进行中|applied/i.test(signal);
+  };
+  if ([record?.normalizedStage, record?.officialStatus, company?.status, company?.progress, latest?.type].some(hasAppliedSignal)) return "applied";
   return "wishlist";
 }
